@@ -1411,6 +1411,40 @@ class Execute(Action):
         return {"Execute": self.args[:]}
 
 
+class ShowActionRing(Action):
+    """Action to show the Action Ring overlay at cursor position"""
+
+    def __init__(self, args=None, warn=True):
+        # No arguments needed for this action
+        pass
+
+    def __str__(self):
+        return "ShowActionRing"
+
+    def evaluate(self, feature, notification: HIDPPNotification, device, last_result):
+        if logger.isEnabledFor(logging.INFO):
+            logger.info("ShowActionRing action triggered")
+
+        # Import here to avoid circular imports
+        try:
+            from solaar.ui import action_ring_instance
+            if action_ring_instance:
+                # Use GLib to run in main thread
+                from gi.repository import GLib
+                # Pass device to Action Ring for haptic feedback
+                GLib.idle_add(action_ring_instance.show_at_cursor, device)
+                logger.info("Action Ring triggered successfully")
+            else:
+                logger.warning("Action Ring instance not initialized")
+        except ImportError as e:
+            logger.error(f"Failed to import Action Ring: {e}")
+
+        return None
+
+    def data(self):
+        return {"ShowActionRing": None}
+
+
 class Later(Action):
     def __init__(self, args, warn=True):
         self.delay = 0
@@ -1470,6 +1504,7 @@ COMPONENTS = {
     "MouseClick": MouseClick,
     "Set": Set,
     "Execute": Execute,
+    "ShowActionRing": ShowActionRing,
     "Later": Later,
 }
 

@@ -48,6 +48,9 @@ assert Gtk.get_major_version() > 2, "Solaar requires Gtk 3 python bindings"
 
 APP_ID = "io.github.pwr_solaar.solaar"
 
+# Global Action Ring instance (initialized in _startup)
+action_ring_instance = None
+
 
 class GtkSignal(Enum):
     ACTIVATE = "activate"
@@ -62,6 +65,17 @@ def _startup(app, startup_hook, use_tray, show_window):
     if use_tray:
         tray.init(lambda _ignore: window.destroy())
     window.init(show_window, use_tray)
+
+    # Initialize Action Ring
+    global action_ring_instance
+    try:
+        from solaar.ui.action_ring import ActionRingOverlay
+        action_ring_instance = ActionRingOverlay()
+        logger.info("Action Ring initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Action Ring: {e}")
+        action_ring_instance = None
+
     startup_hook()
 
 

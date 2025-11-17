@@ -330,3 +330,30 @@ class ExecuteUI(ActionUI):
     @classmethod
     def right_label(cls, component):
         return " ".join([shlex_quote(a) for a in component.args])
+
+
+class ShowActionRingUI(ActionUI):
+    CLASS = diversion.ShowActionRing
+
+    def create_widgets(self):
+        self.widgets = {}
+        self.label = Gtk.Label(
+            label=_("Show Action Ring overlay at cursor position.\nProvides quick access to customizable actions."),
+            halign=Gtk.Align.CENTER,
+            justify=Gtk.Justification.CENTER,
+        )
+        self.widgets[self.label] = (0, 0, 1, 1)
+
+    def show(self, component, editable=True):
+        super().show(component, editable)
+
+    def collect_value(self):
+        return None  # No configuration needed
+
+    @classmethod
+    def left_label(cls, component):
+        return _("Show Action Ring")
+
+    @classmethod
+    def right_label(cls, component):
+        return ""
