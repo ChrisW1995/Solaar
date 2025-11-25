@@ -9,13 +9,252 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
+import cairo
+import subprocess
 
 import logging
+import math
 
 from .bubbles import BubbleLayout, Bubble, FolderBubble
 from .renderer import BubbleRenderer
 
 logger = logging.getLogger(__name__)
+
+
+class TooltipWidget(Gtk.DrawingArea):
+    """Custom tooltip widget with message bubble style and pointing arrow."""
+
+    def __init__(self):
+        super().__init__()
+        self.text = ""
+        self.direction = "top"  # Direction where arrow points: top, bottom, left, right
+        self.set_size_request(100, 40)
+        self.connect("draw", self._on_draw)
+
+    def set_text(self, text):
+        """Set tooltip text."""
+        self.text = text
+        # Adjust size based on text length (rough estimate)
+        text_width = max(100, len(text) * 9)
+        self.set_size_request(text_width, 40)
+        self.queue_draw()
+
+    def set_direction(self, direction):
+        """Set arrow direction: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right."""
+        self.direction = direction
+        self.queue_draw()
+
+    def _on_draw(self, widget, cr):
+        """Draw tooltip with arrow using Cairo."""
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+
+        # Clear background
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+
+        # Tooltip dimensions
+        padding = 12
+        corner_radius = 12
+        arrow_size = 8
+
+        # Calculate bubble rectangle (leaving space for arrow)
+        # Default values
+        bubble_x = 0
+        bubble_y = 0
+        bubble_width = width
+        bubble_height = height
+
+        # Adjust based on arrow direction
+        if self.direction in ["top", "top-left", "top-right"]:
+            bubble_y = arrow_size
+            bubble_height = height - arrow_size
+        elif self.direction in ["bottom", "bottom-left", "bottom-right"]:
+            bubble_height = height - arrow_size
+
+        if self.direction in ["left", "bottom-left", "top-left"]:
+            bubble_x = arrow_size
+            bubble_width = width - arrow_size
+        elif self.direction in ["right", "bottom-right", "top-right"]:
+            bubble_width = width - arrow_size
+
+        # Draw drop shadow with same shape as tooltip (including arrow)
+        cr.save()
+        cr.set_source_rgba(0, 0, 0, 0.15)
+        self._draw_tooltip_shape(cr, bubble_x + 2, bubble_y + 2, bubble_width, bubble_height, corner_radius, arrow_size)
+        cr.fill()
+        cr.restore()
+
+        # Draw tooltip background with arrow
+        cr.set_source_rgba(1, 1, 1, 0.98)
+        self._draw_tooltip_shape(cr, bubble_x, bubble_y, bubble_width, bubble_height, corner_radius, arrow_size)
+        cr.fill_preserve()
+
+        # Draw border
+        cr.set_source_rgba(0, 0, 0, 0.1)
+        cr.set_line_width(1)
+        cr.stroke()
+
+        # Draw text
+        cr.set_source_rgba(0, 0, 0, 0.9)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(14)
+
+        extents = cr.text_extents(self.text)
+        text_x = bubble_x + (bubble_width - extents.width) / 2
+        text_y = bubble_y + (bubble_height + extents.height) / 2
+
+        cr.move_to(text_x, text_y)
+        cr.show_text(self.text)
+
+    def _draw_rounded_rect(self, cr, x, y, width, height, radius):
+        """Draw a rounded rectangle path."""
+        cr.new_path()
+        cr.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
+        cr.arc(x + width - radius, y + radius, radius, 3 * math.pi / 2, 0)
+        cr.arc(x + width - radius, y + height - radius, radius, 0, math.pi / 2)
+        cr.arc(x + radius, y + height - radius, radius, math.pi / 2, math.pi)
+        cr.close_path()
+
+    def _draw_tooltip_shape(self, cr, x, y, width, height, radius, arrow_size):
+        """Draw tooltip shape with arrow pointing in specified direction.
+
+        All paths are drawn clockwise around the perimeter.
+        """
+        cr.new_path()
+
+        # Helper to draw corners
+        def draw_corner(cx, cy, start_angle, end_angle):
+            cr.arc(cx, cy, radius, start_angle, end_angle)
+
+        if self.direction == "top":
+            # Arrow points up (tooltip below bubble)
+            arrow_x = x + width / 2
+            cr.move_to(arrow_x, y - arrow_size)  # Tip
+            cr.line_to(arrow_x + arrow_size, y)  # Right base
+            cr.line_to(x + width - radius, y)    # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, y + height - radius) # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(x + radius, y + height)   # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, y + radius)            # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(arrow_x - arrow_size, y)  # Top edge to arrow left base
+            cr.close_path()
+
+        elif self.direction == "bottom":
+            # Arrow points down (tooltip above bubble)
+            arrow_x = x + width / 2
+            cr.move_to(arrow_x, y + height + arrow_size) # Tip
+            cr.line_to(arrow_x - arrow_size, y + height) # Left base
+            cr.line_to(x + radius, y + height)           # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, y + radius)                    # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(x + width - radius, y)            # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, y + height - radius)   # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(arrow_x + arrow_size, y + height) # Bottom edge to arrow right base
+            cr.close_path()
+
+        elif self.direction == "left":
+            # Arrow points left (tooltip to right of bubble)
+            arrow_y = y + height / 2
+            cr.move_to(x - arrow_size, arrow_y)  # Tip
+            cr.line_to(x, arrow_y - arrow_size)  # Top base
+            cr.line_to(x, y + radius)            # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(x + width - radius, y)    # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, y + height - radius) # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(x + radius, y + height)   # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, arrow_y + arrow_size)  # Left edge to arrow bottom base
+            cr.close_path()
+
+        elif self.direction == "right":
+            # Arrow points right (tooltip to left of bubble)
+            arrow_y = y + height / 2
+            cr.move_to(x + width + arrow_size, arrow_y) # Tip
+            cr.line_to(x + width, arrow_y + arrow_size) # Bottom base
+            cr.line_to(x + width, y + height - radius)  # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(x + radius, y + height)          # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, y + radius)                   # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(x + width - radius, y)           # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, arrow_y - arrow_size) # Right edge to arrow top base
+            cr.close_path()
+
+        elif self.direction == "top-left":
+            # Arrow points to top-left
+            cr.move_to(x - arrow_size, y - arrow_size) # Tip
+            cr.line_to(x + arrow_size, y)              # Right base (on top edge)
+            cr.line_to(x + width - radius, y)          # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, y + height - radius) # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(x + radius, y + height)         # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, y + radius)                  # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL (partial)
+            cr.line_to(x, y + arrow_size)              # Left edge to arrow base
+            cr.close_path()
+
+        elif self.direction == "top-right":
+            # Arrow points to top-right
+            cr.move_to(x + width + arrow_size, y - arrow_size) # Tip
+            cr.line_to(x + width, y + arrow_size)              # Bottom base (on right edge)
+            cr.line_to(x + width, y + height - radius)         # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(x + radius, y + height)                 # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, y + radius)                          # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(x + width - radius, y)                  # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR (partial)
+            cr.line_to(x + width - arrow_size, y)              # Top edge to arrow base
+            cr.close_path()
+
+        elif self.direction == "bottom-left":
+            # Arrow points to bottom-left
+            cr.move_to(x - arrow_size, y + height + arrow_size) # Tip
+            cr.line_to(x, y + height - arrow_size)              # Top base (on left edge)
+            cr.line_to(x, y + radius)                           # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(x + width - radius, y)                   # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, y + height - radius)          # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR
+            cr.line_to(x + radius, y + height)                  # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL (partial)
+            cr.line_to(x + arrow_size, y + height)              # Bottom edge to arrow base
+            cr.close_path()
+
+        elif self.direction == "bottom-right":
+            # Arrow points to bottom-right
+            cr.move_to(x + width + arrow_size, y + height + arrow_size) # Tip
+            cr.line_to(x + width - arrow_size, y + height)              # Left base (on bottom edge)
+            cr.line_to(x + radius, y + height)                          # Bottom edge
+            draw_corner(x + radius, y + height - radius, math.pi / 2, math.pi) # BL
+            cr.line_to(x, y + radius)                                   # Left edge
+            draw_corner(x + radius, y + radius, math.pi, 3 * math.pi / 2) # TL
+            cr.line_to(x + width - radius, y)                           # Top edge
+            draw_corner(x + width - radius, y + radius, 3 * math.pi / 2, 0) # TR
+            cr.line_to(x + width, y + height - radius)                  # Right edge
+            draw_corner(x + width - radius, y + height - radius, 0, math.pi / 2) # BR (partial)
+            cr.line_to(x + width, y + height - arrow_size)              # Right edge to arrow base
+            cr.close_path()
+
+        else:
+            # Fallback - simple rounded rect
+            self._draw_rounded_rect(cr, x, y, width, height, radius)
 
 
 class ActionRingOverlay(Gtk.Window):
@@ -38,6 +277,7 @@ class ActionRingOverlay(Gtk.Window):
 
         # Set window type hint for proper behavior
         self.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        self.set_keep_above(True)  # Always stay on top of other windows
 
         # Enable transparency (requires compositing)
         screen = self.get_screen()
@@ -57,27 +297,10 @@ class ActionRingOverlay(Gtk.Window):
         self.drawing_area = Gtk.DrawingArea()
         self.drawing_area.connect('draw', self._on_draw)
 
-        # Create tooltip label (will be shown outside bubbles)
-        self.tooltip_label = Gtk.Label()
-        self.tooltip_label.set_name("action-ring-tooltip")
+        # Create custom tooltip with arrow (message bubble style)
+        self.tooltip_label = TooltipWidget()
         self.tooltip_label.set_halign(Gtk.Align.START)
         self.tooltip_label.set_valign(Gtk.Align.START)
-
-        # Apply CSS styling for tooltip appearance
-        css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(b"""
-            #action-ring-tooltip {
-                background-color: rgba(40, 40, 40, 0.95);
-                color: white;
-                padding: 8px 14px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: 500;
-                min-width: 40px;
-            }
-        """)
-        context = self.tooltip_label.get_style_context()
-        context.add_provider(css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         # Use overlay to position tooltip
         overlay = Gtk.Overlay()
@@ -134,6 +357,16 @@ class ActionRingOverlay(Gtk.Window):
         # Reset animation state
         self._animation_complete = False
 
+        # Clean up tooltip state before showing
+        if self._tooltip_timer_id:
+            GLib.source_remove(self._tooltip_timer_id)
+            self._tooltip_timer_id = None
+
+        # Clear hover state
+        if self._hovered_bubble:
+            self._hovered_bubble.is_hovered = False
+            self._hovered_bubble = None
+
         # Get current mouse position
         display = Gdk.Display.get_default()
         seat = display.get_default_seat()
@@ -160,19 +393,27 @@ class ActionRingOverlay(Gtk.Window):
         # Initialize bubble layout centered at cursor position
         if self._layout is None:
             self._layout = BubbleLayout(self._cursor_x, self._cursor_y)
-            self._layout.create_primary_bubbles(8)
-
+            
         # Update layout center to cursor position
         self._layout.center_x = self._cursor_x
         self._layout.center_y = self._cursor_y
 
         # Recalculate bubble positions around new center
         # This sets bubbles at center with target positions
-        self._layout.create_primary_bubbles(8)
+        
+        # Load config
+        config = {}
+        if self._device and hasattr(self._device, 'persister') and self._device.persister:
+            config = self._device.persister.get("action-ring", {})
+            
+        self._layout.create_primary_bubbles(8, config)
 
         # Show window
         self.show_all()
         self._visible = True
+
+        # Ensure tooltip is hidden (show_all() shows all widgets)
+        self.tooltip_label.hide()
 
         # Start fade-in and expand animations
         self._animate_fade_in()
@@ -216,6 +457,17 @@ class ActionRingOverlay(Gtk.Window):
         """
         if not self._visible:
             return
+
+        # Clean up tooltip state
+        if self._tooltip_timer_id:
+            GLib.source_remove(self._tooltip_timer_id)
+            self._tooltip_timer_id = None
+        self.tooltip_label.hide()
+
+        # Clear hover state
+        if self._hovered_bubble:
+            self._hovered_bubble.is_hovered = False
+            self._hovered_bubble = None
 
         self._animate_fade_out()
         logger.info("Action Ring hiding")
@@ -388,9 +640,48 @@ class ActionRingOverlay(Gtk.Window):
                     self.drawing_area.queue_draw()
                 else:
                     # Execute action
-                    # TODO: Implement action execution
-                    logger.info(f"Executing action: {bubble.action_type}")
-
+                    if bubble.action_type == "execute" and bubble.action_data:
+                        try:
+                            logger.info(f"Executing command: {bubble.action_data}")
+                            subprocess.Popen(bubble.action_data, shell=True)
+                        except Exception as e:
+                            logger.error(f"Failed to execute command '{bubble.action_data}': {e}")
+                    
+                    elif bubble.action_type == "keypress" and bubble.action_data:
+                        try:
+                            logger.info(f"Executing keypress: {bubble.action_data}")
+                            
+                            # Key mapping for xdotool
+                            key_map = {
+                                "KEY_COPY": "ctrl+c",
+                                "KEY_PASTE": "ctrl+v",
+                                "KEY_CUT": "ctrl+x",
+                                "KEY_UNDO": "ctrl+z",
+                                "KEY_REDO": "ctrl+shift+z",
+                                "KEY_PRINT": "Print",
+                                "KEY_PLAYPAUSE": "XF86AudioPlay",
+                                "KEY_NEXTSONG": "XF86AudioNext",
+                                "KEY_PREVIOUSSONG": "XF86AudioPrev",
+                                "KEY_VOLUMEUP": "XF86AudioRaiseVolume",
+                                "KEY_VOLUMEDOWN": "XF86AudioLowerVolume",
+                                "KEY_MUTE": "XF86AudioMute",
+                                "KEY_BACK": "Alt+Left",
+                                "KEY_FORWARD": "Alt+Right",
+                                "KEY_HOMEPAGE": "Alt+Home",
+                                "KEY_SCALE": "Super+s",  # Task view/Expose
+                            }
+                            
+                            # Get mapped key or convert KEY_xxx to lowercase
+                            if bubble.action_data in key_map:
+                                key_name = key_map[bubble.action_data]
+                            else:
+                                key_name = bubble.action_data.replace("KEY_", "").lower()
+                            
+                            # Use xdotool to simulate key press
+                            subprocess.Popen(["xdotool", "key", key_name])
+                        except Exception as e:
+                            logger.error(f"Failed to execute keypress '{bubble.action_data}': {e}")
+                    
                     # Close overlay after action
                     self.hide_overlay()
                 return True
@@ -427,23 +718,94 @@ class ActionRingOverlay(Gtk.Window):
         return False  # Don't repeat timer
 
     def _update_tooltip(self, bubble, mouse_x, mouse_y):
-        """Update custom tooltip position and text"""
+        """
+        Update custom tooltip position and text.
+
+        Positions tooltip in radial direction from center, matching Logitech Options+ style.
+        """
         if bubble:
             self.tooltip_label.set_text(bubble.label)
 
-            # Position tooltip outside the bubble
-            # Calculate position: below and slightly to the right of bubble
-            tooltip_x = int(bubble.x + bubble.radius + 10)
-            tooltip_y = int(bubble.y + bubble.radius + 5)
+            # Calculate angle from center to bubble
+            dx = bubble.x - self._layout.center_x
+            dy = bubble.y - self._layout.center_y
+            angle = math.atan2(dy, dx)  # -π to π
 
-            # Make sure tooltip stays within window bounds
+            # Convert to degrees for easier understanding
+            angle_deg = math.degrees(angle)  # -180 to 180
+
+            # Determine tooltip direction based on angle (8 directions)
+            # Different offset for left/right vs other directions
+            # Note: arrow_size is 8 pixels (defined in TooltipWidget._on_draw)
+            if -22.5 <= angle_deg < 22.5 or 157.5 <= angle_deg or angle_deg < -157.5:
+                offset = 100  # Increased distance for left/right to account for arrow (90 + 10 extra spacing)
+            else:
+                offset = 50  # Standard distance for other directions
+
+            tooltip_distance = bubble.radius + offset
+
+            # Get actual tooltip dimensions (show it first to measure)
+            self.tooltip_label.show()
+            tooltip_width = self.tooltip_label.get_allocated_width()
+            tooltip_height = self.tooltip_label.get_allocated_height()
+
+            # Use minimum estimates if not yet allocated
+            if tooltip_width < 10:
+                tooltip_width = 100
+            if tooltip_height < 10:
+                tooltip_height = 40  # Increased for arrow space
+
+            # Calculate base position along radial direction
+            tooltip_center_x = bubble.x + tooltip_distance * math.cos(angle)
+            tooltip_center_y = bubble.y + tooltip_distance * math.sin(angle)
+
+            # Determine arrow direction and adjust position
+            # Note: In GTK, Y-axis points DOWN, so:
+            #   - Top bubbles have negative dy (angle around -90°)
+            #   - Bottom bubbles have positive dy (angle around +90°)
+
+            if -22.5 <= angle_deg < 22.5:  # Right (0°)
+                arrow_direction = "left"
+                tooltip_x = int(tooltip_center_x)
+                tooltip_y = int(tooltip_center_y - tooltip_height / 2)
+            elif 22.5 <= angle_deg < 67.5:  # Bottom-Right (+45°)
+                arrow_direction = "top-left"
+                tooltip_x = int(tooltip_center_x - tooltip_width / 4)
+                tooltip_y = int(tooltip_center_y)
+            elif 67.5 <= angle_deg < 112.5:  # Bottom (+90°) - center horizontally on bubble
+                arrow_direction = "top"
+                tooltip_x = int(bubble.x - tooltip_width / 2)
+                tooltip_y = int(bubble.y + bubble.radius + offset)
+            elif 112.5 <= angle_deg < 157.5:  # Bottom-Left (+135°)
+                arrow_direction = "top-right"
+                tooltip_x = int(tooltip_center_x - 3 * tooltip_width / 4)
+                tooltip_y = int(tooltip_center_y)
+            elif 157.5 <= angle_deg or angle_deg < -157.5:  # Left (±180°)
+                arrow_direction = "right"
+                tooltip_x = int(tooltip_center_x - tooltip_width)
+                tooltip_y = int(tooltip_center_y - tooltip_height / 2)
+            elif -157.5 <= angle_deg < -112.5:  # Top-Left (-135°)
+                arrow_direction = "bottom-right"
+                tooltip_x = int(tooltip_center_x - 3 * tooltip_width / 4)
+                tooltip_y = int(tooltip_center_y - tooltip_height)
+            elif -112.5 <= angle_deg < -67.5:  # Top (-90°) - center horizontally on bubble
+                arrow_direction = "bottom"
+                tooltip_x = int(bubble.x - tooltip_width / 2)
+                tooltip_y = int(bubble.y - bubble.radius - offset - tooltip_height)
+            else:  # -67.5 to -22.5: Top-Right (-45°)
+                arrow_direction = "bottom-left"
+                tooltip_x = int(tooltip_center_x - tooltip_width / 4)
+                tooltip_y = int(tooltip_center_y - tooltip_height)
+
+            # Set arrow direction
+            self.tooltip_label.set_direction(arrow_direction)
+
+            # Ensure tooltip stays within window bounds
             width = self.get_allocated_width()
             height = self.get_allocated_height()
 
-            if tooltip_x + 100 > width:
-                tooltip_x = int(bubble.x - bubble.radius - 110)
-            if tooltip_y + 30 > height:
-                tooltip_y = int(bubble.y - bubble.radius - 35)
+            tooltip_x = max(5, min(tooltip_x, width - tooltip_width - 5))
+            tooltip_y = max(5, min(tooltip_y, height - tooltip_height - 5))
 
             # Move tooltip to calculated position
             self.tooltip_label.set_margin_start(tooltip_x)

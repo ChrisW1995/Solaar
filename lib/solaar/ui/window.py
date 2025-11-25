@@ -333,6 +333,21 @@ def _create_window_layout():
     bottom_buttons_box.add(diversion_button)
     bottom_buttons_box.set_child_secondary(diversion_button, True)
 
+    # Action Ring Button
+    from .action_ring import editor
+    def _show_action_ring_editor(trigger):
+        device = _find_selected_device()
+        if device:
+            dlg = editor.ActionRingEditor(device, _window)
+            dlg.run()
+            dlg.destroy()
+
+    action_ring_button = _new_button(
+        _("Action Ring"), "preferences-system", _SMALL_BUTTON_ICON_SIZE, clicked=_show_action_ring_editor
+    )
+    bottom_buttons_box.add(action_ring_button)
+    bottom_buttons_box.set_child_secondary(action_ring_button, True)
+
     vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
     vbox.set_border_width(8)
     vbox.pack_start(panel, True, True, 0)

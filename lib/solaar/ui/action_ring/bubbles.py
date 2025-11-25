@@ -76,12 +76,13 @@ class BubbleLayout:
         self.primary_bubbles: List[Bubble] = []
         self.current_folder: Optional[FolderBubble] = None
 
-    def create_primary_bubbles(self, count: int = 8) -> List[Bubble]:
+    def create_primary_bubbles(self, count: int = 8, config: dict = None) -> List[Bubble]:
         """
         Create primary bubbles in a circular layout.
 
         Args:
             count: Number of bubbles (default 8 for Logitech style)
+            config: Configuration dictionary from device settings
 
         Returns:
             List of positioned bubbles
@@ -99,15 +100,23 @@ class BubbleLayout:
             target_x = self.center_x + self.primary_radius * math.cos(angle)
             target_y = self.center_y + self.primary_radius * math.sin(angle)
 
+            # Load config for this bubble
+            bubble_config = config.get(str(i), {}) if config else {}
+            label = bubble_config.get("label", f"Action {i + 1}")
+            action_type = bubble_config.get("type", "keypress")
+            action_data = bubble_config.get("data", None)
+            icon = bubble_config.get("icon", None)
+
             bubble = Bubble(
                 x=self.center_x,  # Start at center for expand animation
                 y=self.center_y,
                 target_x=target_x,
                 target_y=target_y,
                 radius=self.bubble_size,
-                label=f"Action {i + 1}",
-                action_type="keypress",
-                action_data=None
+                label=label,
+                action_type=action_type,
+                action_data=action_data,
+                icon=icon
             )
             bubbles.append(bubble)
 
